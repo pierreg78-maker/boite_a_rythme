@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#0a0a0f" />
-  <title>GROK DRUM — Batterie téléphone</title>
+  <title>Boite à rythme</title>
   <style>
     :root {
       --bg: #07070c;
@@ -121,7 +121,7 @@
   <div class="app">
     <header>
       <div class="brand">
-        <b>GROK DRUM</b>
+        <b>Boîte à rythme</b>
         <span>8 mesures · 9 lignes · 3×3 pads</span>
       </div>
       <div class="modes">
@@ -543,16 +543,16 @@
 
     document.getElementById("save").onclick = () => {
       const data = { bars, bpm, mode, pattern, customNames };
-      localStorage.setItem("grokdrum", JSON.stringify(data));
+      localStorage.setItem("boite_a_rythme", JSON.stringify(data));
       const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "grok-drum.json";
+      a.download = "boite_a_rythme.json";
       a.click();
       toast("Pattern sauvé");
     };
     document.getElementById("load").onclick = () => {
-      const raw = localStorage.getItem("grokdrum");
+      const raw = localStorage.getItem("boite_a_rythme");
       if (!raw) { toast("Rien en mémoire"); return; }
       const data = JSON.parse(raw);
       bars = Math.min(data.bars || 4, MAX_BARS);
