@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <title>Boite à rythme</title>
+  <style>
+    :root {
+      --bg: #07070c;
+      --panel: #12121a;
+      --line: #1e1e2a;
+      --accent: #7c5cff;
+      --accent2: #00e5c0;
+      --text: #f2f2f7;
+      --muted: #8b8b9a;
+      --hit: #ff3d7f;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; padding: 0; background: var(--bg); color: var(--text);
+      font-family: "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+      height: 100%; overflow: hidden; touch-action: manipulation;
+    }
+    .app {
+      height: 100dvh; display: flex; flex-direction: column;
+      padding: calc(env(safe-area-inset-top) + 8px) 10px calc(env(safe-area-inset-bottom) + 8px);
+      gap: 8px;
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .brand { display: flex; flex-direction: column; }
+    .brand b { letter-spacing: .18em; font-size: 13px; color: var(--accent2); }
+    .brand span { font-size: 11px; color: var(--muted); }
+    .modes { display: flex; gap: 6px; }
+    .modes button, .ctl button, .transport button {
+      background: var(--panel); border: 1px solid var(--line); color: var(--text);
+      border-radius: 999px; padding: 7px 12px; font-size: 12px; font-weight: 600;
+    }
+    .modes button.on { background: var(--accent); border-color: var(--accent); }
+    .ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ctl label { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    input[type=range] { width: 90px; accent-color: var(--accent2); }
+    .seq-wrap {
+      flex: 1 1 auto; min-height: 0; background: var(--panel);
+      border: 1px solid var(--line); border-radius: 14px; overflow: auto;
+      position: relative;
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+    .pads {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+      flex: 0 0 auto;
+    }
+    .pad {
+      aspect-ratio: 1.35 / 1; border-radius: 16px; border: 2px solid #000;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 12px; letter-spacing: .04em;
+      box-shadow: inset 0 -10px 20px rgba(0,0,0,.35);
+      user-select: none;
+    }
+    .pad small { font-weight: 500; font-size: 10px; opacity: .75; margin-top: 2px; }
+    .pad.hit { filter: brightness(1.35); transform: scale(.97); }
+    .transport { display: flex; gap: 6px; align-items: center; }
+    .transport .rec.on { background: #c1121f; border-color: #c1121f; }
+    .transport .play.on { background: var(--accent2); color: #04120f; border-color: var(--accent2); }
+    .hint { font-size: 10px; color: var(--muted); text-align: center; }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <b>Boîte à rythme</b>
+        <span>16 mesures · 9 lignes · 3×3 pads</span>
+      </div>
+      <div class="modes">
+        <button id="modeRock" class="on">ROCK</button>
+        <button id="modeElectro">ÉLECTRO</button>
+        <button id="modeExplore">EXPLORER</button>
+      </div>
+    </header>
+    <div class="ctl">
+      <label>BPM <input id="bpm" type="range" min="60" max="180" value="120" /><span id="bpmVal">120</span></label>
+      <label>Mesures <input id="bars" type="range" min="1" max="16" value="4" /><span id="barsVal">4</span></label>
+      <div class="transport">
+        <button id="play">PLAY</button>
+        <button id="rec">REC</button>
+        <button id="clear">CLEAR</button>
+        <button id="save">SAVE</button>
+        <button id="load">LOAD</button>
+      </div>
+    </div>
+    <div class="seq-wrap"><canvas id="grid"></canvas></div>
+    <div class="pads" id="pads"></div>
+    <div class="hint">Tape un pad · touche la grille pour poser/enlever une note · EXPLORER = importer un son sur un pad</div>
+    <input id="file" type="file" accept="audio/*" />
+  </div>
+  <script>
+    const NAMES_ROCK = [
+      "KICK","SNARE","CLAP",
+      "HH CL","HH OP","RIDE",
+      "TOM L","TOM M","CRASH"
+    ];
+    const NAMES_ELEC = [
+      "808 K","909 S","SNAP",
+      "CHH","OHH","RIM",
+      "TOM","PERC","FX"
+    ];
+    const COLORS = [
+      "#e63946","#f4a261","#e9c46a",
+      "#2a9d8f","#00e5c0","#4cc9f0",
+      "#4361ee","#7c5cff","#ff3d7f"
+    ];
+
+    const STEPS_PER_BAR = 16;
+    const ROWS = 9;
+    let bars = 4;
+    let mode = "rock";
+    let playing = false;
+    let recording = false;
+    let bpm = 120;
+    let step = 0;
+    let pattern = makePattern();
+    let customBuffers = Array(9).fill(null);
+    let assignPad = null;
+    let ctxAudio = null;
+    let nextNoteTime = 0;
+    let timerID = null;
+    const lookahead = 25;
+    const scheduleAhead = 0.12;
+
+    const canvas = document.getElementById("grid");
+    const c2d = canvas.getContext("2d");
+    const padsEl = document.getElementById("pads");
+
+    function makePattern() {
+      return Array.from({ length: ROWS }, () => Array(16 * 16).fill(0));
+    }
+
+    function ensureAudio() {
+      if (!ctxAudio) ctxAudio = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctxAudio.state === "suspended") ctxAudio.resume();
+      return ctxAudio;
+    }
+
+    function synthHit(i, time, vel = 0.9) {
+      const ac = ensureAudio();
+      const t = time ?? ac.currentTime;
+      if (customBuffers[i]) {
+        const src = ac.createBufferSource();
+        src.buffer = customBuffers[i];
+        const g = ac.createGain();
+        g.gain.setValueAtTime(vel, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + Math.min(src.buffer.duration, 1.4));
+        src.connect(g).connect(ac.destination);
+        src.start(t);
+        return;
+      }
+      const electro = mode === "electro";
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      const f = ac.createBiquadFilter();
+      o.connect(f); f.connect(g); g.connect(ac.destination);
+
+      const kits = {
+        0: () => { // kick
+          o.type = electro ? "sine" : "sine";
+          o.frequency.setValueAtTime(electro ? 70 : 140, t);
+          o.frequency.exponentialRampToValueAtTime(electro ? 28 : 38, t + 0.12);
+          f.type = "lowpass"; f.frequency.value = electro ? 180 : 400;
+          g.gain.setValueAtTime(vel, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + (electro ? 0.45 : 0.28));
+          o.start(t); o.stop(t + 0.5);
+        },
+        1: () => { // snare
+          noiseBurst(ac, t, vel, electro ? 0.12 : 0.09, electro ? 1800 : 2500);
+          o.type = "triangle";
+          o.frequency.value = electro ? 180 : 220;
+          g.gain.setValueAtTime(vel * 0.4, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+          f.type = "highpass"; f.frequency.value = 800;
+          o.start(t); o.stop(t + 0.15);
+        },
+        2: () => { noiseBurst(ac, t, vel * 0.8, 0.08, electro ? 3200 : 1800); o.frequency.value = 1; g.gain.value = 0; o.start(t); o.stop(t+0.01); },
+        3: () => { noiseBurst(ac, t, vel * 0.45, 0.035, 9000); o.frequency.value = 1; g.gain.value = 0; o.start(t); o.stop(t+0.01); },
+        4: () => { noiseBurst(ac, t, vel * 0.5, 0.22, 7000); o.frequency.value = 1; g.gain.value = 0; o.start(t); o.stop(t+0.01); },
+        5: () => {
+          o.type = "square"; o.frequency.value = electro ? 520 : 480;
+          f.type = "bandpass"; f.frequency.value = 600; f.Q.value = 4;
+          g.gain.setValueAtTime(vel * 0.35, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + (electro ? 0.6 : 0.35));
+          o.start(t); o.stop(t + 0.65);
+        },
+        6: () => {
+          o.type = "sine"; o.frequency.setValueAtTime(electro ? 160 : 220, t);
+          o.frequency.exponentialRampToValueAtTime(90, t + 0.15);
+          g.gain.setValueAtTime(vel * 0.7, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+          o.start(t); o.stop(t + 0.3);
+        },
+        7: () => {
+          o.type = "sine"; o.frequency.setValueAtTime(electro ? 220 : 320, t);
+          o.frequency.exponentialRampToValueAtTime(120, t + 0.12);
+          g.gain.setValueAtTime(vel * 0.65, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+          o.start(t); o.stop(t + 0.25);
+        },
+        8: () => {
+          noiseBurst(ac, t, vel * 0.7, electro ? 0.4 : 0.55, 6000);
+          o.type = "sawtooth"; o.frequency.value = electro ? 700 : 500;
+          f.type = "highpass"; f.frequency.value = 2000;
+          g.gain.setValueAtTime(vel * 0.25, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+          o.start(t); o.stop(t + 0.55);
+        }
+      };
+      (kits[i] || kits[0])();
+    }
+
+    function noiseBurst(ac, t, vel, dur, hp) {
+      const n = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+      const d = n.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const src = ac.createBufferSource(); src.buffer = n;
+      const f = ac.createBiquadFilter(); f.type = "highpass"; f.frequency.value = hp;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(vel, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      src.connect(f).connect(g).connect(ac.destination);
+      src.start(t);
+    }
+
+    function names() { return mode === "electro" ? NAMES_ELEC : NAMES_ROCK; }
+
+    function renderPads() {
+      padsEl.innerHTML = "";
+      names().forEach((n, i) => {
+        const el = document.createElement("div");
+        el.className = "pad";
+        el.style.background = COLORS[i];
+        el.innerHTML = n + (customBuffers[i] ? "<small>CUSTOM</small>" : "<small>PAD " + (i+1) + "</small>");
+        const hit = () => {
+          flash(el);
+          synthHit(i);
+          if (recording) {
+            const total = bars * STEPS_PER_BAR;
+            pattern[i][step % total] = 1;
+          }
+          if (mode === "explore") {
+            assignPad = i;
+            document.getElementById("file").click();
+          }
+        };
+        el.addEventListener("pointerdown", (e) => { e.preventDefault(); hit(); });
+        padsEl.appendChild(el);
+      });
+    }
+
+    function flash(el) {
+      el.classList.add("hit");
+      setTimeout(() => el.classList.remove("hit"), 90);
+    }
+
+    function resizeGrid() {
+      const wrap = canvas.parentElement;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = wrap.clientWidth * dpr;
+      canvas.height = wrap.clientHeight * dpr;
+      drawGrid();
+    }
+
+    function drawGrid() {
+      const w = canvas.width, h = canvas.height;
+      const total = bars * STEPS_PER_BAR;
+      const left = 78, top = 8, right = 8, bottom = 8;
+      const gw = w - left - right, gh = h - top - bottom;
+      const cw = gw / total, rh = gh / ROWS;
+      c2d.clearRect(0, 0, w, h);
+      c2d.fillStyle = "#12121a";
+      c2d.fillRect(0, 0, w, h);
+      names().forEach((n, r) => {
+        c2d.fillStyle = COLORS[r];
+        c2d.font = `${11 * (canvas.width / canvas.clientWidth || 1)}px sans-serif`;
+        c2d.textBaseline = "middle";
+        c2d.fillText(n, 8, top + rh * r + rh / 2);
+        for (let s = 0; s < total; s++) {
+          const x = left + s * cw, y = top + r * rh;
+          const on = pattern[r][s];
+          const bar = Math.floor(s / STEPS_PER_BAR);
+          c2d.fillStyle = on ? COLORS[r] : ((Math.floor(s / 4) % 2 === 0) ? "#1a1a24" : "#16161f");
+          c2d.fillRect(x + 1, y + 1, cw - 2, rh - 2);
+          if (s % STEPS_PER_BAR === 0) {
+            c2d.fillStyle = "rgba(255,255,255,.08)";
+            c2d.fillRect(x, y, 2, rh);
+          }
+        }
+      });
+      if (playing) {
+        const x = left + (step % total) * cw;
+        c2d.fillStyle = "rgba(0,229,192,.28)";
+        c2d.fillRect(x, top, cw, gh);
+      }
+    }
+
+    canvas.addEventListener("pointerdown", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = canvas.width / rect.width;
+      const x = (e.clientX - rect.left) * dpr;
+      const y = (e.clientY - rect.top) * dpr;
+      const total = bars * STEPS_PER_BAR;
+      const left = 78, top = 8, right = 8, bottom = 8;
+      const gw = canvas.width - left - right, gh = canvas.height - top - bottom;
+      const cw = gw / total, rh = gh / ROWS;
+      const c = Math.floor((x - left) / cw);
+      const r = Math.floor((y - top) / rh);
+      if (r >= 0 && r < ROWS && c >= 0 && c < total) {
+        pattern[r][c] = pattern[r][c] ? 0 : 1;
+        if (pattern[r][c]) synthHit(r);
+        drawGrid();
+      }
+    });
+
+    function scheduler() {
+      const ac = ensureAudio();
+      const secondsPerStep = 60 / bpm / 4;
+      const total = bars * STEPS_PER_BAR;
+      while (nextNoteTime < ac.currentTime + scheduleAhead) {
+        for (let r = 0; r < ROWS; r++) {
+          if (pattern[r][step]) synthHit(r, nextNoteTime);
+        }
+        nextNoteTime += secondsPerStep;
+        step = (step + 1) % total;
+      }
+      drawGrid();
+    }
+
+    function start() {
+      ensureAudio();
+      playing = true;
+      step = 0;
+      nextNoteTime = ctxAudio.currentTime + 0.05;
+      document.getElementById("play").classList.add("on");
+      document.getElementById("play").textContent = "STOP";
+      timerID = setInterval(scheduler, lookahead);
+    }
+    function stop() {
+      playing = false;
+      clearInterval(timerID);
+      document.getElementById("play").classList.remove("on");
+      document.getElementById("play").textContent = "PLAY";
+      drawGrid();
+    }
+
+    document.getElementById("play").onclick = () => playing ? stop() : start();
+    document.getElementById("rec").onclick = () => {
+      recording = !recording;
+      document.getElementById("rec").classList.toggle("on", recording);
+    };
+    document.getElementById("clear").onclick = () => { pattern = makePattern(); drawGrid(); };
+    document.getElementById("bpm").oninput = (e) => {
+      bpm = +e.target.value; document.getElementById("bpmVal").textContent = bpm;
+    };
+    document.getElementById("bars").oninput = (e) => {
+      bars = +e.target.value; document.getElementById("barsVal").textContent = bars; drawGrid();
+    };
+    document.getElementById("modeRock").onclick = () => setMode("rock");
+    document.getElementById("modeElectro").onclick = () => setMode("electro");
+    document.getElementById("modeExplore").onclick = () => setMode("explore");
+
+    function setMode(m) {
+      mode = m;
+      document.getElementById("modeRock").classList.toggle("on", m === "rock");
+      document.getElementById("modeElectro").classList.toggle("on", m === "electro");
+      document.getElementById("modeExplore").classList.toggle("on", m === "explore");
+      renderPads(); drawGrid();
+    }
+
+    document.getElementById("file").onchange = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file || assignPad == null) return;
+      const ac = ensureAudio();
+      const buf = await file.arrayBuffer();
+      customBuffers[assignPad] = await ac.decodeAudioData(buf.slice(0));
+      renderPads();
+    };
+
+    document.getElementById("save").onclick = () => {
+      const data = { bars, bpm, mode, pattern };
+      localStorage.setItem("grokdrum", JSON.stringify(data));
+      const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "grok-drum.json";
+      a.click();
+    };
+    document.getElementById("load").onclick = () => {
+      const raw = localStorage.getItem("grokdrum");
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      bars = data.bars; bpm = data.bpm; mode = data.mode === "electro" ? "electro" : "rock";
+      pattern = data.pattern;
+      document.getElementById("bpm").value = bpm;
+      document.getElementById("bpmVal").textContent = bpm;
+      document.getElementById("bars").value = bars;
+      document.getElementById("barsVal").textContent = bars;
+      setMode(mode);
+    };
+
+    // default rock beat
+    pattern[0][0] = pattern[0][8] = 1;
+    pattern[1][4] = pattern[1][12] = 1;
+    pattern[3][0] = pattern[3][2] = pattern[3][4] = pattern[3][6] =
+    pattern[3][8] = pattern[3][10] = pattern[3][12] = pattern[3][14] = 1;
+
+    renderPads();
+    window.addEventListener("resize", resizeGrid);
+    setTimeout(resizeGrid, 50);
+  </script>
+</body>
+</html>
